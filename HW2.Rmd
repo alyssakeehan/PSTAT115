@@ -1,0 +1,261 @@
+---
+title: "Homework 2"
+author: "Alyssa Keehan and David Brackbill"
+date: "__Due on May 9, 2021 at 11:59 pm__"
+output: 
+  pdf_document: 
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo=TRUE, 
+                      cache=FALSE, 
+                      fig.width=5, 
+                      fig.height=5,
+                      fig.align='center')
+indent1 = '    '
+indent2 = paste(rep(indent1, 2), collapse='')
+indent3 = paste(rep(indent1, 3), collapse='')
+r = function(x, digits=2){ round(x, digits=digits) }
+library(tidyverse)
+library(reshape2)
+#install.packages('HDInterval')
+library(HDInterval)
+library(ggplot2)
+#install.packages('pander')
+library(pander)
+```
+
+__Note:__ If you are working with a partner, please submit only one homework per group with both names and whether you are taking the course for graduate credit or not.  Submit your Rmarkdown (.Rmd) and the compiled pdf on Gauchospace.
+ 
+# Problem 1. Cancer Research in Laboratory Mice
+
+As a reminder from homework 1, a laboratory is estimating the rate of tumorigenesis (the formation of tumors) in two strains of mice, A and B.  They have tumor count data for 10 mice in strain A and 13 mice in strain B.  Type A mice have been well studied, and information from other laboratories suggests that type A mice have tumor counts that are approximately Poisson-distributed. Tumor count rates for type B mice are unknown, but type B mice are related to type A mice. Assuming a Poisson sampling distribution for each group with rates $\theta_A$ and $\theta_B$. We assume $\theta_A \sim \text{gamma}(120, 10)$ and  $\theta_B\sim\text{gamma}(12, 1)$.  We observe $y_A = (12,9,12,14,13,13,15,8,15,6)$ and
+$y_B = (11,11,10,9,9,8,7,10,6,8,8,9,7)$. Now we will actually investigate evidence that Type A mice are have higher rates of tumor formation than Type B mice.  
+
+## a.  For $n_0 \in \{1, 2, ... , 50 \}$, obtain $Pr(\theta_B < \theta_A \mid y_A, y_B)$ via Monte Carlo sampling for $\theta_A \sim \text{gamma}(120, 10)$ and $\theta_B \sim \text{gamma}(12 \times n_0, n_0)$. Make a line plot of $Pr(\theta_B < \theta_A \mid y_A, y_B$) vs $n_0$.  Describe how sensitive the conclusions about the event $\{\theta_B < \theta_A\}$ are to the prior distribution on $\theta_B$.
+
+```{r}
+
+y_A <- c(12, 9, 12, 14, 13, 13, 15, 8, 15, 6)
+y_B <- c(11, 11, 10, 9, 9, 8, 7, 10, 6, 8, 8, 9, 7)
+
+### BEGIN SOLUTION
+pr <- rep(0,50)
+n0 <- seq(1:50)
+for (n in n0){
+  theta_a <- rgamma(10000, 120 + sum(y_A),10 + length(y_A))
+  theta_b <- rgamma(10000, 12*n + sum(y_B), n + length(y_B))
+  pr[n] <- mean(theta_a>theta_b)
+}
+
+plot(n0,pr, type = 'l')
+```
+
+Since we know that a gamma distribution gets stronger as the parameters get larger, our prior distribution at $\theta_b$ gets stronger as n approaches infinity. And since we see that the posterior $Pr(\theta_B < \theta_A \mid y_A, y_B)$ gets lower as $n_0$ increases, we can say that as $\theta_B$ gets stronger, the posterior probability decreases.
+
+## b. Repeat the previous part replacing the event $\{\theta_B < \theta_A \}$ with the event $\{\tilde Y_B < \tilde Y_A\}$, where $\tilde Y_A$ and $\tilde Y_B$ are samples from the posterior predictive distribution.  
+    
+```{r}
+y_A = c(12, 9, 12, 14, 13, 13, 15, 8, 15, 6)
+y_B = c(11, 11, 10, 9, 9, 8, 7, 10, 6, 8, 8, 9, 7)
+
+### BEGIN SOLUTION
+# same as before, but take into consdieration y_tilda
+pr <- rep(0,50)
+n0 <- seq(1:50)
+for (n in n0){
+  theta_a <- rgamma(10000, 120 + sum(y_A),10 + length(y_A))
+  theta_b <- rgamma(10000, 12*n + sum(y_B), n + length(y_B))
+  
+  y_Ahat <- rpois(length(theta_a), theta_a)
+  y_Bhat <- rpois(length(theta_b), theta_b)
+  pr[n] <- mean(y_Ahat > y_Bhat)
+}
+
+plot(n0, pr, type = 'l')
+```
+
+Similarly, as $\theta_b$ gets stronger, the probability that $Pr(\theta_B < \theta_A \mid y_A, y_B)$ decreases.
+
+## c.  In the context of this problem, describe the meaning of the events $\{\theta_B < \theta_A\}$ and $\{\tilde Y_B < \tilde Y_A\}$.  How are they different?
+    
+The event $\{\theta_B < \theta_A\}$ describes chances group B accumulates a lower cancer rate than group A.
+
+The event $\{\tilde Y_B < \tilde Y_A\}$ describes the chances that the number of mice in group b that have cancer are less than the of those in group A.
+
+They are different because one is regarding probabilities and the other is counts. 
+    
+# 2. Posterior Predictive Model Checking
+
+Model checking and refinement is an essential part of Bayesian data analysis. Let's investigate the adequacy of the Poisson model for the tumor count data. Consider strain A mice only for now, and generate posterior predictive datasets $y_A^{(1)}, ..., y_A^{(1000)}$. Each $y_A^{(s)}$ is a sample of size $n_A = 10$ from the Poisson distribution with parameter $\theta_A^{(s)}$, $\theta_A^{(s)}$ is itself a sample from the posterior distribution $p(\theta_A \mid y_A)$ and $y_A$ is the observed data.  For each $s$, let $t^{(s)}$ be the sample average divided by the sample variance of $y_A^{(s)}$.
+
+## a.  If the Poisson model was a reasonable one, what would a "typical" value $t^{(s)}$ be? Why?
+
+If the Poisson model was a reasonable one, a "typical" value for $t^{(s)}$ would be 1 because since the $\tilde y_A$ values come from a Poisson distribution, it is expected that borht the Expectation and Variance are both equal to its $\lambda$. Since they are equal to the same thing, the typical value for $t^{(s)}$ would be 1 since it is what we would be getting by dividing mean with variance.
+
+## b.  In any given experiment, the realized value of $t^{s}$ will not be exactly the "typical value" due to sampling variability.  Make a histogram of $t^{(s)}$ and compare to the observed value of this statistic, $\frac{\text{mean}(y_A)}{\text{var}(y_A)}$. Based on this statistic, make a comment on if the Poisson model seems reasonable for these data (at least by this one metric).  
+
+```{r}
+set.seed(123)
+y_A = c(12, 9, 12, 14, 13, 13, 15, 8, 15, 6)
+t_SA <- rep(NA, 1000)
+
+### BEGIN SOLUTION
+for (i in 1:1000){
+  # sample theta^(s)
+  theta_sA <- rgamma(1, 120 + sum(y_A), 10 + length(y_A))
+  
+  # sample y~ 
+  y_tild_sA <- rpois(10, theta_sA)
+  
+  # compute the test statistic
+  t_SA[i] <- mean(y_tild_sA)/var(y_tild_sA)
+}
+```
+```{r}
+# change to data frame so we can use ggplot
+use_tStatA <- as.data.frame(t_SA)
+
+# variable identifying the observed test statistic
+x_intA <- mean(y_A)/var(y_A)
+
+use_tStatA %>% ggplot( aes( x = t_SA )) +
+  geom_histogram( fill = 'gray37') +
+  geom_vline(aes(xintercept = x_intA,
+                   color = 'Observed Test Statistic'),
+              size = 1) +
+  xlab("Sampled test statistics")
+```
+
+Based on the result above, it seems like the observed test statistic is located in a pretty occurent place on the historgram, so the Poisson Model seems reasonable these data.
+
+## c. Repeat the part b) above for strain B mice, using $Y_B$ and $n_B = 13$ to generate the samples.  Assume the prior distribution $p(\theta_B) \sim \text{Gamma}(12, 1)$.  Again make a comment on the Poisson model fit.
+```{r}
+set.seed(124)
+y_B = c(11, 11, 10, 9, 9, 8, 7, 10, 6, 8, 8, 9, 7)
+t_SB <- rep(NA, 1000)
+
+### BEGIN SOLUTION
+for (i in 1:1000){
+  # sample theta^(s)
+  theta_sB <- rgamma(1, 12 + sum(y_B), 1 + length(y_B))
+  
+  # sample y~ 
+  y_tild_sB <- rpois(13, theta_sB)
+  
+  # compute the test statistic
+  t_SB[i] <- mean(y_tild_sB)/var(y_tild_sB)
+}
+```
+```{r}
+# change to data frame so we can use ggplot
+use_tStatB <- as.data.frame(t_SB)
+
+# variable identifying the observed test statistic
+x_intB <- mean(y_B)/var(y_B)
+
+use_tStatB %>% ggplot( aes( x = t_SB )) +
+  geom_histogram( fill = 'gray37') +
+  geom_vline(aes(xintercept = x_intB,
+                   color = 'Observed Test Statistic'),
+              size = 1) +
+  xlab("Sampled test statistics")
+```
+
+Based on the result above, The observed test statistic is located pretty far from the general distribution of the sampled data, so we can say that the Poisson model is not reasonable for the type B mice population.
+
+# 3.  Interval estimation with rejection sampling.
+
+## a. Use rejection sampling to sample from the following density:
+$$p(x)= \frac{1}{4}|\text{sin}(x)|\times I\{x \in [0, 2\pi]\}$$
+Use a proposal density which is uniform from 0 to $2\pi$ and generate at least 1000 true samples from p(x).  Compute and  report the Monte Carlo estimate of the upper and lower bound for the 50% quantile interval using the `quantile` function on your samples.  Compare this to the 50% HPD region calculated on the samples.  What are the bounds on the HPD region?  Report the length of the quantile interval and the total length of the HPD region. What explains the difference?  Hint: to compute the HPD use the `hdi` function from the `HDInterval` package.  As the first argument pass in `density(samples)`, where `samples` is the name of your vector of true samples from the density.  Set the `allowSplit` argument to true and use the `credMass` argument to set the total probability mass in the HPD region to 50%.
+
+### Step 1: generate at least 1000 true samples from p_x
+```{r}
+set.seed(145)
+rej_samps <- c()
+
+while (length(rej_samps) < 1000){
+    # sample from proposal distribution
+    theta_s <- runif(1,0,2*pi)
+    
+    # sample from unif(0,1)
+    u_s <- runif(1,0,1)
+    
+    # obtain density value
+    px <- abs(sin(theta_s))/4
+    
+    # setting M value to 2*Pi because it is the highest lowest possibly value for M
+    M <- 2*pi
+    
+    # determine wheter you keep value as a sample
+    if(u_s < px/(M/(2*pi))){
+      rej_samps <- c(rej_samps, theta_s)
+}
+}
+```
+
+### Step 2: Finding Upper and Lower Bound of 50% Quantile Interval
+```{r}
+c(quantile(rej_samps)[2],quantile(rej_samps)[4])
+```
+The lower bound of the 50% Quantile Interval is 1.587343 and the upper bound is 4.715497 .
+
+### Step 3: Obtain the 50% HPD region.
+```{r}
+hdi(density(rej_samps), allowSplit=TRUE, credMass=0.5)[1:2,]
+```
+The bounds for the HPD region are (1.010477, 1.995129) and (4.062897, 5.310123)
+
+### Step 4: Calculate the lengths of each interval and explain the differences
+```{r}
+q_len <- 4.715497-1.587343 
+hpd_len <- (5.310123-4.062897) + (1.995129-1.010477)
+q_len
+hpd_len
+```
+
+After calculating the lengths of each type of interval, we see that the length of the 50% Quantile interval is 3.128154 and the length of the Highest Posterior Density region is 2.231878. The HPD region is the shorter interval because it is the highest possible density (hence the name). Having a high density means a large concentration within a small area. So, the HPD region is essentially the most concentrated/shortest region that contains 50% of the data. Meanwhile with the quantile interval, it is purely based on the number of cummulative values at a certain point, not necessarily reliant on a length.
+
+## b.  Plot $p(x)$ using the `curve` function (base plotting) or `stat_function` (ggplot).  Add lines corresponding to the intervals / probability regions computed in the previous part to your plot using them `segments` function.  To ensure that the lines don't overlap visually, for the HPD region set `y0` and `y1` to 0 and for the quantile interval set `y0` and `y1` to 0.01.  Make the segments for HPD region and the segment for quantile interval different colors.  Report the length of the quantile interval and the total length of the HPD region, verifying that indeed the HPD region is smaller.
+    
+
+```{r}
+### Rejection sampling and interval construction
+### BEGIN SOLUTION
+
+### HPD Region
+hd_region <- HDInterval::hdi(density(rej_samps), allowSplit=TRUE, credMass=0.5) # SOLUTION
+print(hd_region)
+print(sprintf("Total HPD region length: %.02f", sum(hd_region[, "end"] - hd_region[,"begin"])))
+
+### Quantile Interval
+quantile_interval <- quantile(rej_samps, c(0.25, 0.75)) # SOLUTION
+print(quantile_interval)
+print(sprintf("Total Quantile region length: %.02f", quantile_interval[2] - quantile_interval[1]))
+```
+After calculating the length of each of these intervals, we can confirm that the length of the 50% HPD region is smaller than the 50% Quantile Interval
+
+```{r}
+# plotting the density
+curve(abs(sin(x)), from=0, to=2*pi, lwd = 3)
+
+# adding horizontal line segments
+segments(x0=hd_region[1, 1], y0=0, x1=hd_region[1, 2], y1=0, col="red", lwd=2)
+segments(x0=hd_region[2, 1], y0=0, x1=hd_region[2, 2], y1=0, col="red", lwd=2)
+segments(x0=quantile_interval[1], y0=0.01, x1=quantile_interval[2], y1=0.01, col="blue", lwd=2)
+
+# adding vertical lines to show the intervals
+abline(v = hd_region[1, 1], col = 'red', cex = 1, lty = 2) 
+abline(v = hd_region[1, 2], col = 'red', cex = 1, lty = 2)
+abline(v = hd_region[2, 1], col = 'red', cex = 1, lty = 2)
+abline(v = hd_region[2, 2], col = 'red', cex = 1, lty = 2)
+abline(v = quantile_interval[1], col = 'blue', cex = 1, lty = 2)
+abline(v = quantile_interval[2], col = 'blue', cex = 1, lty = 2)
+
+# adding a legend
+legend(5.33,1, legend = c('Quantile','HPD'),
+       col = c('blue','red'), lty = c(1,1), cex = 0.5, box.lty = 0, title = '50%')
+```
