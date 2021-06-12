@@ -1,0 +1,302 @@
+---
+title: "Homework 3"
+author: "Alyssa Keehan"
+date: "__Due on May 23, 2021 at 11:59 pm__"
+output:
+  pdf_document:
+    latex_engine: xelatex
+  html_document:
+    df_print: paged
+urlcolor: blue
+---
+
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo=TRUE, 
+                      cache=FALSE, 
+                      fig.width=5, 
+                      fig.height=5,
+                      fig.align='center')
+r = function(x, digits=2){ round(x, digits=digits) }
+indent1 = '    '      
+indent2 = paste(rep(indent1, 2), collapse='')
+library(tidyverse)
+library(reshape2)
+library(magrittr)
+library(rstan)
+```
+
+# Problem 1. Rejection Sampling the Beta distribution. (15 pts)
+
+Assume we did not have access to the `rbeta` function for sampling from a Beta, but we were able to evaluate the density, `dbeta`.  This is a very common setting in Bayesian statistics, since we can always evaluate the (proportional) posterior density $p(\theta \mid y) \propto p(y\mid \theta)p(\theta)$ but we don't have immediate access to a method for sampling from this distribution. 
+
+## Let p(x) be a Beta(3, 9) density, $q_1(x)$ a Uniform(0, 1) density, and $q_2(x)$ a Normal($\mu=0.25, \sigma=0.15$) density.
+
+### a. Use rejection sampling to sample from p(x) by proposing samples from $q_1(x)$.  To do so, first find $M_1 = \underset{x}{\text{max }} p(x)/q_1(x)$ using the `optimize` function and set `lower=0`, `upper=1`, and `maximum = TRUE` (since we are maximizing not minimizing, the default).  $M$ will be the value in the `objective` argument returned by optimize (`maximum` tells us where the maximum occurs, but not what height it achieves).  Propose 10000 samples and keep only the accepted samples.
+```{r}
+# create a denisty ratio to compute M
+density_ratio1 <- function(x){
+    dbeta(x,3,9)/dunif(x,0,1)
+}
+
+# compute M
+M1 <- optimize(density_ratio1, lower = 0, upper = 1, maximum = TRUE)$objective
+```
+```{r}
+set.seed(17)
+n <- 10000
+
+# sample from proposal
+theta_s1 <- runif(n,0,1)
+ 
+# retrieve only the accepted samples 
+accept1 <- runif(n) < (density_ratio1(theta_s1) / M1)
+
+# place accepted samples in one list
+samps1 <- theta_s1[accept1]
+```
+  
+### b. Use rejection sampling to sample from p(x) by proposing samples from $q_2(x)$.  To do this you need to find $M_2 = \underset{x}{\text{max }} p(x)/q_2(x)$ as above.  Propose 10000 samples and keep only the accepted samples.
+```{r}
+# create a denisty ratio to compute M
+density_ratio2 <- function(x){
+    dbeta(x,3,9)/dnorm(x,0.25,0.15)
+}
+
+# compute M
+M2 <- optimize(density_ratio2, lower = 0, upper = 1, maximum = TRUE)$objective
+```
+```{r}
+set.seed(127)
+
+# sample from proposal
+theta_s2 <- rnorm(n,0.25,0.15)
+ 
+# retrieve only the accepted samples 
+accept2 <- runif(n) < (density_ratio2(theta_s2) / M2)
+
+# place accepted samples in one list
+samps2 <- theta_s2[accept2]
+```
+  
+### c. Plot the p(x), $M_1q_1(x)$ and $M_2q_2(x)$ all on the same plot and verify visually that the scaled proposal densities "envelope" the target, p(x).   Set the xlimits of the plot from 0 to 1.  Use different color lines for the various densities so are clearly distinguishable. (5 pts)
+```{r}
+ggplot(aes(x=x), data = data.frame(x=0)) +
+  stat_function(fun = function(x) dbeta(x,3,9), aes(colour = 'p(x)'), cex = 1.5) +
+  stat_function(fun = function(x) dunif(x,0,1), aes(colour = 'q_1(x)'), cex = 1.5) +
+  stat_function(fun = function(x) dnorm(x,0.25,0.15), aes(colour = 'q_2(x)'), cex = 1.5) +
+  xlim(0,1)
+```
+### d. Which rejection sampler had the higher rejection rate? Why does this make sense given the plot from the previous part? This means when proposing 10000 samples from each proposal, the Monte Carlo error of our approximation will be higher when proposing from ____ (choose $q_1$ or $q_2$). (5 pts)
+
+
+**Answer**: _I believe $q_1$ has the higer rejection rate just because the number of accepted samples is much less than that of $q_2$. In addition, the general curvature of $q_2$ matches more with $p(x)$ than that of $q_1$. **This means when proposing 10,000 samples from each proposal, the Monte Carol error of our approximation will be higher when proposing from $q_1$**_
+
+
+### e.  Report the variance of Beta(3, 9) distribution by computing the variance of the beta samples.  How does this compare to the theoretical variance (refer to the probability cheatsheet). (5 pts)
+```{r}
+samp_var1 <- var(samps1)
+samp_var2 <- var(samps2)
+theoretical_variance <- (3*9)/(((3+9)^2)*(3+9+1))
+samp_var1
+samp_var2
+theoretical_variance
+```
+
+**Answer**: _The sample variance of $q_1$ is slightly less than that of $q_2$ but $q_2$'s variance is closer to the theoretical variance. This makes sense because the distribution of $q_2$ is closest to our proposal $p(x)$. One reason for the slight decrease in variance for $q_1$ -- the distribution with higher rejection rate-- is that since it has a much smaller acceptance region that $q_2$, it has less variance._
+
+# Problem 2. Frequentist Coverage of The Bayesian Posterior Interval. (35 pts)
+
+Suppose that $y_1,..,y_n$ is an IID sample from a $Normal(\mu, 1)$.  We wish to estimate $\mu$.  
+
+### a. For Bayesian inference, we will assume the prior distribution $\mu \sim Normal(0,\frac{1}{\kappa_0})$ for all parts below. Remember, from lecture that we can interpret $\kappa_0$ as the pseudo-number of prior observations with sample mean $\mu_0 = 0$.  State the posterior distribution of $\mu$ given $y_1,..,y_n$. Report the lower and upper bounds of the $95\%$ quantile-based posterior credible interval for $\mu$, using the fact that for a normal distribution with standard eviation $\sigma$, approximately $95\%$ of the mass is between $\pm 1.96\sigma$. (5 pts) \newline
+
+Since the Normal Distribution falls into the Normal-Normal Model, it has a conjugate prior and posterior following Normal Distribution as well. According to slide 10 from the May 5 lecture, the posterior distribution of $\mu$ is $\mu | Y \sim N(\mu_n, \tau^{2}_n)$ where 
+$$\mu_n = \frac{\frac{1}{\tau^{2}}\mu_0 + \frac{n}{\sigma^{2}}\bar{Y}}{\frac{1}{\tau^{2}}+\frac{n}{\sigma^{2}}}$$ 
+and 
+$$\tau^{2}_n = \frac{1}{\frac{1}{\tau^{2}}+\frac{n}{\sigma^{2}}}$$ 
+Therefore, by simplifying, we get the posterior distribution of 
+$$\mu |  y_1,..,y_n \sim N(\frac{\bar{y}n}{K_0 + n},\frac{1}{K_0 + n})$$
+Since the bounds for a 95% posterior credible interval is calculated approximately by $\mu$ plus or minus $1.96\sigma$, our interval is $$(\mu_n - \frac{1.96}{\sqrt{K_0 + n}},\mu_n + \frac{1.96}{\sqrt{K_0 + n}})$$
+
+
+### b. Plot the length of the posterior credible interval as a function of $\kappa_0$, for $\kappa_0 = 1, 2, ..., 25$ assuming $n=10$.  Report how this prior parameter effects the length of the posterior interval and why this makes intuitive sense. (10 pts)
+
+
+```{r}
+n <- 10
+k_0 <- 1:25
+lengths <- as.data.frame(k_0)
+lengths['CI_Length'] <-  2 *1.96/sqrt(k_0 + n)
+ggplot(lengths) +geom_line(aes(x = k_0, y = CI_Length), color = 'blue') +
+  geom_point(aes(x = k_0, y = CI_Length))
+```
+_As shown above, as the value of $K_0$ increases, the length of the confidence interval decreases. This is because if the level of significance, in this case 95% stays the same, then more counts of data would create less variance. Even when we calculate the value of sigma or Variance, we see that higher values of $K_0$ would decrease the variance. In an interval that is controlled by the value of the variance, this shows reason for the result above._
+
+### c. Now we will evaluate the _frequentist coverage_ of the posterior credible interval on simulated data.  Generate 1000 data sets where the true value of $\mu=0$ and $n=10$.  For each dataset, compute the posterior $95\%$ interval endpoints (from the previous part) and see if it the interval covers the true value of $\mu = 0$.  Compute the frequentist coverage as the fraction of these 1000 posterior 95\% credible intervals that contain $\mu=0$.  Do this for each value of $\kappa_0 = 1, 2, ..., 25$.  Plot the coverage as a function of $\kappa_0$. (5 pts)
+
+```{r}
+n<- 10
+u_0 <- 0
+sigma <-1
+freq_cover <- function(k){
+  count = 0
+  
+  # 1000 iterations
+  for (i in 1:1000){
+    
+    # 10 random samples from N(0,1)
+    samp <- rnorm(10,0,1)
+    
+    # compute posterior mean and variance
+    post_mean <- (u_0*k  + n/sigma*mean(samp))/(k+n)
+    post_var <- 1/(k + n/sigma)
+    
+    # calculate the bounds for the interval
+    lower <- post_mean - (1.96*sqrt(post_var))
+    upper <- post_mean + (1.96*sqrt(post_var))
+    
+    if(lower < 0 && upper > 0){
+      count = count + 1
+    }
+  }
+  return(count)
+}
+```
+```{r}
+set.seed(127)
+
+# apply to the k_o values and add to the table
+lengths['freq_cover'] <- apply(lengths,1,freq_cover)
+lengths
+```
+```{r}
+ggplot(lengths) + geom_point(aes(x = k_0, y=freq_cover)) +
+  geom_line(aes(x=k_0,y=freq_cover), color = 'blue')
+```
+    
+### d. Repeat the 1c but now generate data assuming the true $\mu=1$. (5 pts)
+
+```{r}
+# set u_0 = 1
+u_0 <- 1
+
+# append the values to the table
+lengths['freq_cover_mu_1'] <- apply(lengths,1,freq_cover)
+lengths
+```
+```{r}
+ggplot(lengths) + geom_point(aes(x = k_0, y=freq_cover_mu_1)) +
+  geom_line(aes(x=k_0,y=freq_cover_mu_1), color = 'blue')
+```
+
+    
+### e. Explain the differences between the coverage plots when the true $\mu$ = 0 and the true $\mu = 1$.  For what values of $\kappa_0$ do you see closer to nominal coverage (i.e. 95\%)?  For what values does your posterior interval tend to overcover (the interval covers the true value more than 95\% of the time)? Undercover (the interval covers the true value less than 95\% of the time)?  Why does this make sense? (10 pts)
+
+**Answer.** _When looking at the plots for the coverages when $\mu$ is either 0 or 1, we see that as $K_0$ increases, the nominal coverage increases for $\mu = 0$ but decreases for $\mu = 1$. For $\mu = 0$, the $k_0$ value closest to the nominal coverage would be around 1 since for my simulation, it was closest to 950. However for when $\mu = 1$, the highest coverage is 750 so it never gets to be quite that high for exact nominal coverage. For $\mu = 0$, as $k_0$ it tends to over cover up until complete coverage by about a value of 6 while for $\mu = 1$, it undercovers for any value of $k_0$. This makes sense because as $K_0$ increases, so does the confidence in the mean since this also decreases the length of the interval. For $\mu = 1$, the interval would slowly move so it centers 1 as $k_0$ increases which is why we see the drastic decrease. On the contrary, using $\mu = 0$ would slowly move the center to 0 which helps increase the proportion of coverage of 0 even with the decreasing length of the confidence interval._
+ 
+# Problem 3. Bayesian inference for the normal distribution in Stan. (50pts)
+
+Create a new Stan file by selecting  "Stan file" in the Rstudio menu.  Save it as `IQ_model.stan`.  We will make some basic modifications to the template example in the default Stan file for this problem.  Consider the IQ example used from class.  Scoring on IQ tests is designed to yield a N(100, 15) distribution for the general population.   We observe IQ scores for a sample of 
+$n$ individuals from a particular town, $y_1, \ldots y_n \sim N(\mu, \sigma^2)$.  Our goal is to estimate the population mean in the town.  Assume the $p(\mu, \sigma) = p(\mu \mid \sigma)p(\sigma)$, where $p(\mu \mid \sigma)$ is $N(\mu_0, \sigma/\sqrt{\kappa_0})$ and $p(\sigma)$ is Gamma(a, b). Before you administer the IQ test you believe the town is no different than the rest of the population, so you assume a prior mean for $\mu$ of  $\mu_0 = 100$, but you aren't to sure about this a priori and so you set $\kappa_0 = 1$ (the effective number of pseudo-observations). Similarly, a priori you assume $\sigma$ has a mean of 15 (to match the intended standard deviation of the IQ test) and so you decide on setting $a=15$ and $b=1$ (remember, the mean of a Gamma is a/b).  Assume the following IQ scores are observed: 
+
+```{r, cache = TRUE}
+y <- c(70, 85, 111, 111, 115, 120, 123)
+N <- length(y)
+
+# Prior assumptions
+k0 <- 1
+mu0 <- 100
+a <- 15
+b <- 1
+
+# Combine
+input_dat <- list(y = y, N = N, 
+                  k0 = k0, mu0 = mu0,
+                  a = a, b = b)
+
+# Fit stan model
+set.seed(134)
+stan_fit = stan(file = 'IQ_model.stan', 
+                data = input_dat)
+```
+```{r}
+library(rstan)
+# Extract
+samples = rstan::extract(stan_fit)
+mu_samps = samples$mu
+sigma_samps = samples$sigma
+
+# put into dataframe
+df_stan = data.frame(mu_samps, 
+                      precision_stan = 1 / sigma_samps^2)
+```
+### a. Make a scatter plot of the posterior distribution of the median, $\mu$, and the precision, $1/\sigma^2$. Put $\mu$ on the x-axis and $1/\sigma^2$ on the y-axis.  What is the posterior relationship between $\mu$ and $1/\sigma^2$?  Why does this make sense? _Hint:_ review the lecture notes. (10pts)
+
+```{r}
+df_stan %>% 
+  ggplot(aes(x = mu_samps, y = precision_stan)) +
+  geom_point(size = 0.75, alpha = 0.3, color = 'red') +
+  ggtitle('Normal Model') + xlab('mu') + ylab('1/sigma^2')
+```
+**Answer.** _The posterior relationship between mu and the precision is sort of normally distributed. This is logical because since $\mu$ is Normally distributed with mean at 100. It looks as though the mean of this plot is also centered pretty close to 100. In addition, typically the variance is much smaller with samples close to the mean because there are higher frequency of those observations, thus making it more precise. Since the precision is inversely related to sigma, smaller sigma values correspond to higher precision values which can explain the peak at the $\mu_0$ value of 100._
+
+### b. You are interested in whether the mean IQ in the town is greater than the mean IQ in the overall population.  Use Stan to find the posterior probability that $\mu$ is greater than 100. (20pts)
+
+```{r stan_def, cache=TRUE}
+
+library(rstan)
+y <- c(70, 85, 111, 111, 115, 120, 123)
+N <- length(y)
+
+mean(mu_samps > 100)
+```
+
+**Answer.** _The posterior probability that $\mu$ is greater than 100 is 0.687._
+
+### c. You notice that two of the seven scores are significantly lower than the other five.  You think that the normal distribution may not be the most appropriate model, in particular because you believe some people in this town are likely have extreme low and extreme high scores.  One solution to this is to use a model that is more robust to these kinds of outliers.  The [Student's t distribution](https://en.wikipedia.org/wiki/Student%27s_t-distribution) and the [Laplace distribution](https://en.wikipedia.org/wiki/Laplace_distribution) are two so called "heavy-tailed distribution" which have higher probabilities of outliers (i.e. observations further from the mean).  Heavy-tailed distributions are useful in modeling because they are more robust to outliers.  Fit the model assuming now that the IQ scores in the town have a Laplace distribution, that is $y_1, \ldots, y_n \sim Laplace(\mu, \sigma)$. Create a copy of the previous stan file, and name it "IQ_laplace_model.stan".  _Hint:_ In the Stan file you can replace `normal` with `double_exponential` in the model section, another name for the Laplce distribution.  Like the normal distribution it has two arguments, $\mu$ and $\sigma$.  Keep the same prior distribution, $p(\mu, \sigma)$ as used in the normal model.  Under the Laplace model, what is the posterior probability that the median IQ in the town is greater than 100?  How does this compare to the probability under the normal model? Why does this make sense? (20pts)
+
+```{r stan_samples, dependson="stan_def", cache=TRUE}
+y <- c(70, 85, 111, 111, 115, 120, 123)
+N <- length(y)
+
+# Prior assumptions
+k0 <- 1
+mu0 <- 100
+a <- 15
+b <- 1
+
+# Combine
+input_dat <- list(y = y, N = N, 
+                  k0 = k0, mu0 = mu0,
+                  a = a, b = b)
+
+# Fit stan model
+set.seed(100)
+laplace_stan_fit = stan(file = 'IQ_laplace_model.stan', 
+                data = input_dat)
+
+# Extract
+library(rstan)
+lsamples = rstan::extract(laplace_stan_fit)
+mu_lsamps = lsamples$mu
+sigma_lsamps = lsamples$sigma
+
+#df-ize so can use ggplot
+laplace_df = data.frame(mu_lsamps, 
+                      precision_stan = 1 / sigma_lsamps^2)
+```
+```{r}
+# plot
+laplace_df %>% 
+  ggplot(aes(x = mu_lsamps, y = precision_stan)) +
+  geom_point(size = 0.75, alpha = 0.3, color = 'blue') +
+  ggtitle('Laplace Model') + xlab('mu') + ylab('1/sigma^2')
+```
+```{r}
+mean(mu_lsamps > 100)
+```
+
+**Answer.** _Under the laplace model, the posterior probability that the mean in the town is greater than 100 is 0.8405. This probability is significantly larger than that of the normal model. This makes sense because the Laplace distribution is "heavy-tailed" which means they have higher probabilities of outliers._ 
