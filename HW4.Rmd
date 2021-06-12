@@ -1,0 +1,783 @@
+---
+title: "Homework 4"
+author: "PSTAT 115, Spring 2021"
+date: "Alyssa Keehan, David Brackbill"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    extra_dependencies: ["amsmath","xcolor","soul","amsthm"]
+  html_document:
+    df_print: paged
+---
+
+```{r setup, echo = F, warning = F, message= F}
+library(knitr)
+library(pander)
+panderOptions('digits', 6)
+library(tidyverse)
+library(latex2exp)
+library(ggforce)
+library(coda)
+knitr::opts_chunk$set(echo=TRUE, 
+                      cache=FALSE, 
+                      results = 'hold',
+                      fig.width=5, 
+                      fig.height=5,
+                      fig.align='center')
+
+r = function(x, digits=2){ round(x, digits=digits) }
+indent1 = '    '      
+indent2 = paste(rep(indent1, 2), collapse='')
+
+options(tinytex.verbose = TRUE)
+options(buildtools.check = function(action) TRUE )
+knitr::opts_chunk$set(echo = TRUE, eval=TRUE)
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(rstan))
+suppressPackageStartupMessages(library(coda))
+suppressPackageStartupMessages(library(testthat))
+```
+
+# Problem 1.  Logistic regression for toxicity data (part 1)
+
+**Beehive pollutants ($x_i$) and collapse ($y_i$)**
+
+An environmental agency is testing the effects of a pesticide that can cause acute poisoning in bees. The environmental agency collects data on exposure to pesticides in parts per million (ppm) and collapsed beehives due to acute pesticide poisoning.  
+
+In the data they collect, each observation is pair $(x_i, y_i)$, where $x_i$ represents the dosage of the pollutant and $y_i$ represents whether or not the hive survived.  Take $y_i=1$ means that the beehive has collapsed from poisoning and $y_i=0$ means the beehive survived.  
+
+The agency collects data at several different sites, each of which was exposed to a different dosages. The resulting data can be seen below:
+
+```{r, echo=FALSE}
+inv_logit <- function(x) { exp(x)/(1 + exp(x)) }
+x <- round(runif(20, 1, 2), 2)
+theta <- inv_logit(-5 + 4*x)
+y <- rbinom(length(x), 1, theta)
+```
+
+```{r logistic_reg_setup}
+x <- c(1.06, 1.41, 1.85, 1.5, 0.46, 1.21, 1.25, 1.09, 
+       1.76, 1.75, 1.47, 1.03, 1.1, 1.41, 1.83, 1.17, 
+       1.5, 1.64, 1.34, 1.31)
+    
+y <- c(0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 
+       1, 0, 0, 1, 1, 0, 0, 1, 1, 0)
+```
+
+Assume that bee-hive collapse, $y_i$, given pollutant exposure level $x_i$, is $$Y_i \sim \text{Bernoulli}(\theta(x_i))$$ where $\theta(x_i)$ is the probability of collapse given dosage $x_i$.  
+
+We will assume that $\text{logit}(\theta_i(x_i)) = \alpha + \beta x_i$ where $\text{logit}(\theta)$ is defined as $\text{log}(\theta / (1-\theta))$. This model is known as _logistic regression_ and is one of the most common methods for modeling probabilities of binary events.  
+
+\newpage
+
+## 1a.
+
+Solve for $\theta_i(x_i)$ as a function of $\alpha$ and $\beta$ by inverting the logit function.  
+
+If you haven't seen logistic regression before (it is covered in more detail in PSTAT 127 and PSTAT131), it is essentially a generalization of linear regression for binary outcomes. The inverse-logit function maps the linear part, $\alpha + \beta x_i$, which can be any real-valued number into the interval [0, 1] (since we are modeling probabilities of binary outcome, we need the mean outcome to be confined to this range).
+
+**Answer**
+
+\begin{align*} 
+\text{logit}(\theta_i(x_i)) &= \alpha + \beta x_i \\
+\log \dfrac{\theta_i(x_i)}{1-\theta_i(x_i)} &= \alpha + \beta x_i \\
+exp\left(\log \dfrac{\theta_i(x_i)}{1-\theta_i(x_i)} \right) &= e^{\alpha +\beta x_i}  \\
+\dfrac{\theta_i(x_i)}{1-\theta_i(x_i)} &= e^{\alpha +\beta x_i} \\
+\theta_i(x_i) &= e^{\alpha +\beta x_i} -e^{\alpha +\beta x_i} \ \theta_i(x_i) \\
+\theta_i(x_i) + e^{\alpha +\beta x_i} \ \theta_i(x_i) &= e^{\alpha +\beta x_i} \\
+\theta_i(x_i)(1 + e^{\alpha +\beta x_i}) &= e^{\alpha +\beta x_i} \\
+\theta_i(x_i) &= \dfrac{e^{\alpha +\beta x_i}}{1 + e^{\alpha +\beta x_i}}
+\end{align*}
+
+## 1b.
+
+The dose at which there is a 50\% chance of beehvive collapse, $\theta(x_i) = 0.5$, is known as LD50 ("lethal dose 50%"), and is often of interest in toxicology studies.  Solve for LD50 as a function of $\alpha$ and $\beta$.  
+
+**Answer**
+
+\begin{align*}
+0.5 &= \dfrac{e^{\alpha +\beta x_i}}{1 + e^{\alpha +\beta x_i}} \\
+0.5 &= \dfrac{1}{1 + e^{-\alpha -\beta x_i}} \\
+0.5 + 0.5 (e^{-\alpha -\beta x_i}) &= 1 \\
+e^{-\alpha -\beta x_i} &= 1 \\
+ln(e^{-\alpha -\beta x_i}) &= ln(1) \\
+-\alpha -\beta x_i &= 0 \\
+x_i &= -\dfrac{\alpha}{\beta} \\
+\end{align*}
+
+\newpage
+
+## 1c.
+
+Implement the logistic regression model in stan by reproducing the stan model described here: [https://mc-stan.org/docs/2_18/stan-users-guide/logistic-probit-regression-section.html](https://mc-stan.org/docs/2_18/stan-users-guide/logistic-probit-regression-section.html).  
+
+* Run the stan model on the beehive data to get Monte Carlo samples. 
+
+* Compute Monte Carlo samples of the LD50 by applying the function derived in the previous part to your $\alpha$ and $\beta$ samples. 
+
+* Report an estimate of the posterior mean of the LD50 by computing the sample average of all Monte Carlo samples of LD50.
+
+```{r stan_def, cache = TRUE, results = 'hide'}
+set.seed(123)
+# Model data
+x <- c(1.06, 1.41, 1.85, 1.5, 0.46, 1.21, 1.25, 1.09, 
+       1.76, 1.75, 1.47, 1.03, 1.1, 1.41, 1.83, 1.17, 
+       1.5, 1.64, 1.34, 1.31)
+    
+y <- c(0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 
+       1, 0, 0, 1, 1, 0, 0, 1, 1, 0)
+
+# Input
+input_stan = list(x = x, y = y,  N = length(x))
+
+# Fit stan model
+fit_stan = stan(file = 'C:/Users/David/Desktop/Pstat 115/115 Assignments/Bee_model.stan', 
+                data = input_stan)
+# Extract
+alpha_stan <- extract(fit_stan)$alpha
+beta_stan <- extract(fit_stan)$beta
+lp_stan <- extract(fit_stan)$lp__
+```
+```{r, eval = F, echo = F}
+# Examine output
+lp_stan %>% head()
+
+# Plot
+data.frame(alpha_stan, beta_stan, lp_stan) %>%
+  ggplot(aes(x=alpha_stan, y=beta_stan, color = lp_stan)) +
+  labs(x = 'alpha', y = 'beta', color = 'log prob') +
+  geom_point()
+```
+```{r}
+# Compute LD50
+ld50 <- -alpha_stan/beta_stan
+
+# Posterior mean LD50
+ld50_mean <- mean(ld50)
+```
+```{r, echo = F}
+tibble(ld50_mean) %>% 
+  rename('Posterior mean of LD50' = ld50_mean) %>%
+  pander()
+```
+
+
+\newpage
+
+## 1d.
+
+Make a plot showing both 50\% and 95% confidence band for the probability of a hive collapse as a function of pollutant exposure, Pr($y=1 \mid \alpha, \beta, x)$. 
+
+Plot your data on a grid of x-values from $x = 0$ to $2$.  _Hint:_ see lab 7 for a similar example.
+
+```{r, dependson="logistic_reg_setup", cache=TRUE, fig.height = 3, fig.width=7}
+## Code modified from lab 7
+# Grid of x value limits
+xgrid <- seq(0, 2, by = 0.01)
+
+# Function to compute y values
+compute_curve <- function(sample) {
+alpha <- sample[1]
+beta <- sample[2]
+y_values <- alpha + beta*xgrid
+}
+
+# Apply function to samples
+res <- apply(cbind(alpha_stan, beta_stan), 1, compute_curve)
+
+# each col of res corresponds to a set of alpha, beta values.
+# each row of corresponds to a fixed x 
+# the value in each cell is (y | x, a, b)
+
+# Apply function to quantiles
+quantiles <- apply(res, 1, function(x) quantile(x, c(0.025, 0.25, 0.75, 0.975)))
+
+# Get point estimates
+posterior_mean <- rowMeans(res)
+posterior_median <- apply(res, 1, median)
+
+# Plot
+plot <- tibble(x = xgrid,
+       q025 = quantiles[1, ],
+       q25 = quantiles[2, ],
+       q75 = quantiles[3, ],
+       q975 = quantiles[4, ],
+       mean = posterior_mean) %>%
+  ggplot() +
+  geom_ribbon(aes(x = xgrid, ymin = q025, ymax = q975, fill = '95% CI')) +
+  geom_ribbon(aes(x = xgrid, ymin = q25, ymax = q75, fill = '50% CI')) +
+  geom_line(aes(x = xgrid, y = posterior_mean, size = 'Posterior mean estimate')) +
+  theme_bw() +
+  labs(y = 'Posterior mean of y') +
+  scale_fill_manual('Confidence Intervals', values= c('gray50','gray80')) +
+  scale_size_manual('Lines', values= 1)
+
+plot
+```
+
+**Consideration**
+
+Because this is a classification problem, y is either 0 or 1. Let's zoom into the region where the posterior mean is $\in [0,1]$:
+
+```{r, echo = T, fig.height = 3, fig.width=7}
+# Plot with y axis limits for [0,1]
+plot +
+  labs(title = TeX('Portion of graph where y $\\in (0,1)$')) +
+  facet_zoom(ylim = c(0,1))
+```
+
+**Inference**
+
+We can see that the model's 95% certainty band spans from $x \in [0.9, 1.6]$. That is, when pesticide level is between 0.9 and 1.6 there may *or may not* be beehive collapse. 
+
+When pesticide level is below ~0.9, we can be at least 95% confident that the beehive **will not** collapse and when the pesticide level is above ~1.6 we can be at least 95% confident that the beehive **will** collapse.
+
+\newpage
+
+# Problem 2.  Logistic regression for toxicity data (part 2)
+
+In problem 1, we inferred the effects of the pesticide by fitting a model in Stan.  In order to develop a deeper understanding of MCMC, in this problem we will implement our own Metropolis-Hastings algorithm.  
+
+We first need to write a function to compute the _log_ posterior density.  Why the log posterior? In practice, the posterior density may have _extremely_ small values, especially when we initialize the sampler and may be far from the high posterior mode areas.  
+
+For example, computing the ratio of a normal density 1000 standard deviations from the mean to a normal density 1001 standard deviations from the mean fails because in both cases `dnorm` evaluates to 0 due to numerical underflow and 0/0 returns NaN.  However, we can compute the log ratio of densities:
+
+**Why log:**
+
+```{r}
+dnorm(1000) / dnorm(1001)
+dnorm(1000, log=TRUE) - dnorm(1001, log=TRUE)
+```
+
+$$\text{Let } r = \text{min}(1, \frac{p(\theta^*|y)}{p(\theta_t|y)})$$  
+
+In the accept/reject step of the your implementation of the MH algorithm, rather than checking whether $u < r$, it is equivalent to check whether $log(u) < log(r)$.  Doing the accept/reject on the log scale will avoid any underflow issues and prevent our code from crashing.  
+
+## 2a.
+
+```{r, echo = F, eval =F}
+# **Intuition behind logistic regression**
+# We want to compute the log posterior density for logistic regression.
+# 
+# $$
+# \text{Source: https://www.countbayesie.com/blog/2019/6/12/logistic-regression-from-bayes-theorem} \\
+# \text{From countBayesie we know the log posterior density is the inverse logit:} \\ 
+# p(y | x) = \frac{1}{1+e^{-(\alpha + \beta x)}} \\
+# \text{This is what we've already derived in 1a} \\
+# \text{Inverse logit function converts log odds into probabilities} \\
+# \text{But what are log odds and why would we care?} \\
+# log odds (y | x) = \alpha + \beta x \\
+# \text{Interestingly, the log odds resembles linear regression} \\
+# \text{To get the posterior density, we can transform the log odds:} \\
+# odds(y | x) = e^{\alpha + \beta x} \\
+# \text{From the first to second equation, we converted prob to odds} \\
+# \text{If we reverse what we did, we can get p(y|x):} \\
+# p(y | x) = \frac{e^{\alpha + \beta x}}{1 + e^{\alpha + \beta x}} \\
+# p(y | x) = \frac{1}{1+e^{-(\alpha + \beta x)}} \\
+# \text{Voila!} \\
+# \text{The point of this was to show logistic regression uses a linear model at its heart!}
+# $$
+# 
+# Recalling that $Y_i \sim \text{Bernoulli}(\theta(x_i))$, our log posterior density function will be related to this distribution.
+# 
+# $$\text{Bernoulli likelihood:} \quad \prod^n_{i=1}p^{y_i}(1-p)^{1-y_i}$$
+# 
+# *Megan's Advice*
+# 
+# Take the log of our sampling distribution: log(prod(p^y(1-p)^(1-y)))
+```
+
+```{r log_post, eval = T}
+## Pesticide toxicity data
+x <- c(1.06, 1.41, 1.85, 1.5, 0.46, 1.21, 1.25, 1.09, 
+       1.76, 1.75, 1.47, 1.03, 1.1, 1.41, 1.83, 1.17, 
+       1.5, 1.64, 1.34, 1.31)
+    
+y <- c(0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 
+       1, 0, 0, 1, 1, 0, 0, 1, 1, 0)
+
+#Log posterior function.  Must incorporate x and y data above.
+log_posterior <- function(theta){
+  
+  alpha <- theta[1]
+  beta <- theta[2]
+  
+  # Compute the probabilities as a function of alpha and beta 
+  # for the observed x, y data
+  p <- (exp(alpha+beta*x))/(1 + exp(alpha+beta*x))
+    
+  if(any(p == 0) | any(p == 1))
+    {-Inf}  # log likelihood is -Inf if prob in {0,1}
+  else{
+    bernoulli_likelihood <- prod(p^y*(1-p)^(1-y))
+    log(bernoulli_likelihood)
+    }
+}
+```
+
+\newpage
+
+## 2b.
+
+```{r, echo = F}
+### Instructions
+# You will now complete the Metropolis-Hastings sampler by filling in the missing pieces of the algorithm below. `theta_0` is a vector of length 2, with the first argument as the initial alpha value  and the second argument as the initial beta value.  
+# 
+# As your proposal, use $J(\theta*|\theta_t) \sim Normal(\theta_t, \Sigma)$. You can sample from the multivariate normal using `mvtnorm::rmvnorm`. 
+# 
+# The effectiveness of your sampler will be determined by the tuning parameter, $\Sigma$, the covariance of the bivariate normal distribution.  This determines the size / shape of the proposal. $\Sigma$ is determined by the `cov` argument in your sampler.  
+# 
+# 
+# * Run the sampler with `cov = diag(2)`, the default.
+# 
+# * In homework 5 you showed that the dose at which there is a  50\% chance of hive collapse, the LD50, can be expressed as $-\alpha/\beta$.
+# 
+# * Run your sampler for 10000 iterations with a burnin of 1000 iterations.
+# 
+# * Verify that the posterior mean LD50 based on your sampler is close to 1.2, as it was with Stan.
+
+###############################################
+## Metropolis-Hastings for the Logistic Model
+###############################################
+
+## Function to generate samples using the Metropolis-Hasting Sampler
+
+## theta_0: initialization of the form c(alpha_init, beta_init) for some values alpha_init, beta_init
+## burnin: amount of iterations to discard to reduce dependence on starting point
+## iters: total number of iterations to run the algorithm (must be greater than `burnin`)
+```
+
+```{r, dependson="log_post", echo=TRUE}
+mh_logistic <- function(theta_0, burnin, iters, cov=diag(2)){
+    # Initialize parameters.
+    theta_t <- theta_0
+    
+    ## Create a matrix where we will store samples
+    theta_out <- matrix(0, nrow=iters, ncol=2, dimnames=list(1:iters, c("alpha", "beta")))
+    for(i in 1:iters){
+        
+        ## Propose new theta = (alpha, beta)
+        ## The proposal will be centered the current
+        ## value theta_t.  Use mvtnorm::rmvnorm
+        theta_p <- mvtnorm::rmvnorm(1,theta_t,cov)
+        
+        ## Accept/reject step.  Keep theta prev if reject, otherwise take theta_p
+        ## Will require evaluating `log_posterior` function twice
+        ## Log-rejection ratio for symmetric proposal
+        logr <- (log_posterior(theta_p)-log_posterior(theta_t))
+  
+        ## Update theta_t based on whether the proposal is accepted or not
+        s <- log(runif(1,min=0,max=1))
+        
+        if(s<logr){
+          theta_t <- theta_p
+        }
+        
+        ## Save the draw
+        theta_out[i, ] <- theta_t
+    }
+    ## Chop off the first part of the chain -- this reduces dependence on the starting point.
+    if(burnin == 0){theta_out}
+    else{theta_out[-(1:burnin), ]}
+}
+```
+```{r}
+#function(theta_0, burnin, iters, cov=diag(2))
+set.seed(127)
+samples <- mh_logistic(c(0, 0), 1000, 10000)
+# remember -alpha/beta
+ld50_posterior_mean <- -mean(samples[,1])/mean(samples[,2])
+```
+```{r, echo= F}
+tibble(ld50_posterior_mean) %>% 
+  rename('Posterior mean of LD50' = ld50_posterior_mean) %>%
+  pander()
+```
+
+**Answer**
+
+After calculating the posterior mean, we do see that it is close to 1.2.
+
+\newpage
+
+## 2c.
+
+```{r, echo = F}
+### Instructions
+# Report the effective sample size for the alpha samples using the `coda::effectiveSize` function.  
+# 
+# * Make a traceplot of  the samples of the alpha parameter.  If `alpha_samples` were the name of the samples of the alpha parameter, then you can plot the traceplot using `coda::traceplot(as.mcmc(alpha_samples))`.
+# 
+# * Improve upon this effective sample size from your first run by finding a new setting for `cov`.  _Hint:_ try variants of `k*diag(2)` for various values of $k$ to increase or decrease the proposal variance. 
+# 
+# * If you are ambitious, try proposing using a covariance matrix with non-zero correlation between the two parameters.  What effective sample size were you able to achieve? You should be able to at least double the effective sample size from your first run.  
+# 
+# * Plot the traceplot based on the new value of `cov`. 
+```
+ 
+
+```{r, echo=TRUE, fig.width = 6, fig.height = 3}
+alpha_samples <- samples[,1]
+
+alpha_ess <- coda::effectiveSize(alpha_samples)
+
+init_trace <- coda::traceplot(as.mcmc(alpha_samples), main = 'Initial traceplot')
+```
+```{r, fig.width = 6, fig.height = 3}
+## Re run the sampler using your new setting of cov
+k <- 4
+samples_new <- mh_logistic(c(0, 0), 1000, 10000, k*diag(2))
+alpha_samples_new <- samples_new[,1]
+
+alpha_ess_new <- coda::effectiveSize(alpha_samples_new)
+
+new_trace <- coda::traceplot(as.mcmc(alpha_samples_new), 
+                             main = 'New traceplot')
+```
+```{r, echo = F}
+tibble(alpha_ess, alpha_ess_new) %>% 
+  rename('k = 1' = alpha_ess,
+         'k = 4' = alpha_ess_new) %>%
+  pander('Effective sample sizes')
+```
+
+**Answer**
+
+We see that as we increase the value of k, our effective sample size gets bigger. With a k value of 4, we obtain an effective n about twice as large as the effective n from the original sample.
+
+\newpage
+
+# Problem 3. Estimating Skill In Baseball
+
+In baseball, the batting average is defined as the fraction of base hits (successes) divided by "at bats" (attempts).  We can conceptualize a player's "true" batting skill as $$p_i = \lim_{n_i\to\infty} \frac{y_i}{n_i}$$  In other words, if each at bat was independent (a simplifying assumption), $p_i$ describes the total fraction of success for player $i$ as the number of attempts gets very large.  Our goal is to estimate the true skill of all player as best as possible using only a limited amount of data. As usual, for independent counts of success/fail data it is reasonable to assume that $Y_i \sim \text{Bin}(n_i, p_i)$. 
+
+The file "lad.csv" includes the number of hits, `y` and the number of attempts `n` for $J=10$ players on the Los Angeles Dodgers after the first month of the most recent baseball season.  The variable `val` includes the end-of-season batting average and will be used to validate the quality of various estimates. If you are interested, at the end of the assignment we have included the code that was used to scrape the data.  
+
+```{r baseball_setup, echo = F, results='hide'}
+
+baseball_data <- read_csv("lad.csv", col_types=cols())
+
+## observed hits in the first month
+y <- baseball_data$y
+
+## observed at bats in the first month
+n <- baseball_data$n
+
+## observed batting average in the first month (same as MLE)
+theta_mle <- y/n
+
+## number of players 
+J <- nrow(baseball_data)
+
+## end of the year batting average, used to evaluate estimates
+val <- baseball_data$val
+
+(data.frame(baseball_data, theta_mle, regression = val - theta_mle) %>%
+  rename(final = val))
+
+```
+
+\newpage
+
+## 3a.
+
+Compute the standard deviation of the empirical batting average, $y/n$ and then compute the sd of the "true skill", (the `val` variable representing the end of season batting average).  Which is smaller? Why does this make sense? _Hint:_ What sources of variation are present in the empirical batting average?
+
+**Answer**
+```{r, echo = F}
+# Let $X_i$ be Bernoulli s.t. $Y = \sum^n_{i=1}X_i$
+# 
+# Now we have a good estimate for the p of a Binomal:
+# 
+# \begin{align*}
+# \hat{p} &= \dfrac{1}{n}\sum^n_{i=1} X_i \\
+# var(\hat{p}) &= var\left[\dfrac{1}{n}\sum^n_{i=1} X_i\right] \\
+# &= \dfrac{1}{n^2} \sum^n_{i=1} var[X_i]  \\
+# &= \dfrac{1}{n^2} \sum^n_{i=1} p(1-p)  \\
+# &= \dfrac{1}{n^2} \ np(1-p) \\
+# &= \dfrac{p(1-p)}{n} 
+# \end{align*}
+# 
+# 
+# We will estimate p with $\hat{p} = y/n$, our MLE.
+## Jk we should just use sd()
+```
+
+```{r}
+empirical_sd <- sd(theta_mle)
+true_sd <- sd(val)
+```
+```{r, echo = F}
+tibble(empirical_sd, true_sd) %>% 
+  rename('Empirical SD' = empirical_sd,
+         'True SD' = true_sd) %>%
+  pander()
+```
+
+
+Using sd(), we see that the standard deviation of the final batting percentages is smaller.
+
+This makes sense because these final percentages have much higher n for each value compared to the empirical data. The empirical data's small sample sizes introduce much more sampling variability.
+
+\newpage
+
+## 3b.
+
+Consider two estimates for the true skill of player $i$, $p_i$:
+
+\begin{align*}
+&1) \quad \hat p_i^{(\text{mle})} \ \ = \ \frac{y_i}{n_i} \\
+&2) \quad \hat p_i^{(\text{comp})} = \frac{\sum_j y_j}{\sum n_j}
+\end{align*}
+
+Estimator 1) is the MLE for each player and ignores any commonalities between the observations. This is sometimes termed the "no pooling" estimator since each parameter is estimating separately without "pooling" information between them.  
+
+Estimator 2) assumes all players have identical skill and is sometimes called the "complete pooling" estimator, because the data from each problem is completely "pooled" into one common set. 
+
+In this problem, we'll treat the end-of-season batting average as a proxy for true skill, $p_i$.  
+
+* Compute the root mean squared error (RMSE), $\sqrt{\frac{1}{J}\sum_i (\hat p_i - p_i)^2}$ for the "no pooling" and "complete pooling" estimators using the variable `val` as a stand-in for the true $p_i$.  
+
+* Does "no pooling" or "complete pooling" give you a better estimate of the end-of-year batting averages in this specific case?
+
+**Answer**
+
+```{r, dependson="baseball_setup"}
+# Maximum likelihood estimate
+phat_mle <- y/n
+
+# Pooled estimate
+phat_pooled <- rep(sum(y)/sum(n), J)
+
+# Root mean squared error
+rmse_no_pooling <- sqrt(sum((phat_mle - val)^2)/J)
+rmse_complete_pooling <- sqrt(sum((phat_pooled - val)^2)/J)
+```
+```{r, echo = F}
+tibble(rmse_no_pooling, rmse_complete_pooling) %>% 
+  rename('MLE' = rmse_no_pooling,
+         'Pooled' = rmse_complete_pooling) %>%
+  pander('Root mean squared error')
+```
+
+In this case, the MLE estimates give a lower RMSE and thus a better estimate of year-end batting averages.
+
+\newpage
+
+## 3c.
+      
+The no pooling and complete pooling estimators are at opposite ends of a spectrum.  There is a more reasonable compromise: "partial pooling" of information between players.  Although we assume the number of hits follow a binomial distribution.  
+
+To complete this specification, we assume:
+
+$\text{logit}(p_i) \sim N(\mu, \tau^2)$ for each player $i$
+
+$\mu$ is the "global mean" (on the logit scale)
+
+$\text{exp}(\mu)/(1+\text{exp}(\mu))$ is the overall average batting average across all players  
+
+$\tau$ describes how much variability there is in the true skill of players.  
+
+If $\tau = 0$ then all players are identical and the only difference in the observed hits is presumed to be due to chance.  If $\tau^2$ is very large then the true skill differences between players is assumed to be large and our estimates will be close to the "no pooling" estimator.  How large should $\tau$ be? We don't know but we can put a prior distribution over the parameter and sample it along with the $p_i$'s!  Assume the following model:
+
+\begin{align*}
+& y_i \sim Bin(n_i, p_i) \\
+& \theta_i = logit(p_i)\\
+&\theta \sim N(\mu, \tau^2)\\
+&p(\mu) \propto \text{const} \\
+&p(\tau) \propto \text{Cauchy}(0, 1)^+ \text{, (the Half-cauchy distribution, see part d.)}
+\end{align*}
+
+**Question**
+
+State the correct answer in each case: as $\tau \to \infty$, the posterior mean estimate of $p_i$ in this model will approach the (complete pooling / no pooling) estimator and as $\tau \to 0$ the posterior mean estimate of $p_i$ will approach the  (complete pooling / no pooling) estimator.  Give a brief justification for your answer.    
+
+**Answer**
+
+As $\tau \to \infty$, the posterior mean estimate of $p_i$ will approach the **no pooling** estimator.
+
+As $\tau \to 0$, the posterior mean estimate of $p_i$ will approach the **complete pooling** estimator.
+
+$\tau$ represents the variability of true skill between players so as $\tau$ decreases the player skill converges towards the mean and as it increases the player skill diverges from the mean.
+
+\newpage
+
+## 3d.
+
+```{r, echo = F}
+### Instructions
+# Implement the hierarchical binomial model in Stan.  As a starting point for your Stan file modify the `eight_schools.stan` file we have provided and save it as `baseball.stan`. To write the hierarchical binomial model, we need the following modifications to the normal hierarchical model:
+# 
+#   - Since we are fitting a hierarchical binomial model, not a normal distribution, we no longer need sampling variance $\sigma_i^2$.  Remove this from the data block. 
+#   
+#   - The outcomes `y` are now integers.  Change `y` to an array of integer types in the data block.
+#   
+#   - We need to include the number of at bats for each player (this is part of the binomial likelihood).  Add an array of integers, `n` of length $J$ to the data block.
+#   
+#   - Replace the sampling model for $y$ with the binomial-logit: `binomial_logit(n, theta)`. This is equivalent to `binomial(n, inv_logit(theta))`.
+#   
+#   - The model line for `eta` makes $\theta_i \sim N(\mu, \tau^2)$.  Leave this in the model.
+#   
+#   - Add a half-cauchy prior distribution for $\tau$: `tau ~ cauchy(0, 1);`. The half-cauchy has been suggested as a good default prior distribution for group-level standard deviations in hierarchical models.  See \url{http://www.stat.columbia.edu/~gelman/research/published/taumain.pdf}.
+# 
+# Find the posterior means for each of the players batting averages by looking at the samples for `inv_logit(theta_samples)`. Report the RMSE for hierarchical estimator.
+# How does this compare to the RMSE of the complete pooling and no pooling estimators? 
+# Which estimator had the lowest error? 
+```
+
+
+```{r baseball_stan, dependson="baseball_setup", cache=TRUE, results = 'hide'}
+
+# Run Stan and compute the posterior mean
+input_stan = list(J = J, n = n,  y = y)
+
+fit_stan = stan(file = 'C:/Users/David/Desktop/Pstat 115/115 Assignments/baseball.stan', 
+                data = input_stan)
+
+# Extract thetas for all 10 players (which is on logit scale)
+theta_stan <- extract(fit_stan)$theta
+
+```
+```{r}
+# Get batting averages by inverting with this function
+inv_logit <- function(x) {
+  exp(x) / (1+exp(x))
+}
+
+# Get mean batting average for each player (column means)
+phat_partial <- inv_logit(theta_stan) %>% colMeans()
+
+# RMSE from Stan posterior means
+rmse_partial_pooling <- sqrt(sum((phat_partial - val)^2)/J)
+```
+```{r, echo = F}
+tibble(rmse_no_pooling, rmse_complete_pooling, rmse_partial_pooling) %>% 
+  rename('MLE' = rmse_no_pooling,
+         'Pooled' = rmse_complete_pooling,
+         'Partial pooling' = rmse_partial_pooling) %>%
+  pander('RMSE of pooling approaches')
+```
+
+
+\newpage
+
+## 3e.
+
+Use the `shrinkage_plot` function provided below to show how the posterior means shrink the empirical batting averages.  Pass in `y/n` and the posterior means of $p_i$ as arguments.
+
+```{r, echo=F}
+shrinkage_plot <- function(empirical, posterior_mean,
+                           shrink_point=mean(posterior_mean)) {
+  
+  tibble(y=empirical, pm=posterior_mean) %>% 
+    ggplot() + 
+    geom_segment(aes(x=y, xend=pm, y=1, yend=0), linetype="dashed") + 
+    geom_point(aes(x=y, y=1)) + 
+    geom_point(aes(x=pm, y=0)) + 
+    theme_bw(base_size=16) + 
+    geom_vline(xintercept=shrink_point, color="blue", size=1.2) + 
+    ylab("") + xlab("Estimate") +ggtitle('Shrinkage plot')+
+    xlim(c(0.2, 0.4)) + 
+    scale_y_continuous(breaks=c(0, 1), 
+                       labels=c("Posterior Mean", "MLE"), 
+                       limits=c(0,1))
+
+}
+```
+```{r}
+shrinkage_plot(theta_mle, phat_partial)
+```
+
+\newpage
+
+## 3f.
+
+* Make a histogram of the posterior distribution for the global batting average, $\frac{\text{e}^{\mu}}{1+e^{\mu}}$, based on the LAD data.  
+
+```{r, warning = F, echo = F, message = F}
+# Plot inv_logit(mu) density
+data.frame(mu = inv_logit(extract(fit_stan)$mu)) %>% 
+  ggplot(aes(x=mu)) +
+  geom_histogram(fill='#005A9C', col ='white') +
+  theme_minimal() +
+  labs(title = "Stan's distribution of LAD global batting average",
+       x = TeX('$\\mu$'))
+
+```
+
+* True or false: as the observed at bats for each of the 10 LAD batters $n_i \to \infty$, our estimate of the global batting average converges to a constant?  Why or why not?
+
+**Answer**
+
+Let's find out by feeding Stan a y and n vector where each element is 1,000 times its original value.
+
+If we converge to a constant, we would expect to see a narrowing of the distribution of posterior $mu$.
+
+```{r, results = 'hide', warning = F, message = F, echo = F}
+## Testing with vector of larger n's
+y <- baseball_data$y*1000
+n <- baseball_data$n*1000
+
+# Run Stan and compute the posterior mean
+input_stan = list(J = J, n = n,  y = y)
+
+fit_stan = stan(file = 'C:/Users/David/Desktop/Pstat 115/115 Assignments/baseball.stan', 
+                data = input_stan)
+```
+```{r, warning = F, echo = F, message = F}
+# Plot inv_logit(mu) density
+data.frame(mu = inv_logit(extract(fit_stan)$mu)) %>% 
+  ggplot(aes(x=mu)) +
+  geom_histogram(fill='#005A9C', col ='white') +
+  theme_minimal() +
+  labs(title = "Mu distribution w/ very high N",
+       x = TeX('$\\mu$'))
+```
+
+We do not see a narrowing of the posterior $\mu$ distribution, thus this test seems to refute the idea that the global batting average converges to a constant as $n_i \to \infty$.
+
+
+```{r, echo=F, eval=FALSE}
+
+### Appendix: Code for scraping Dodgers baseball data
+
+# Source: http://billpetti.github.io/baseballr
+
+## Install the baseballr package
+devtools::install_github("BillPetti/baseballr")
+
+library(baseballr)
+library(tidyverse)
+
+## Download data from the chosen year
+year <- 2019
+
+one_month <- daily_batter_bref(t1 = sprintf("%i-04-01", year), t2 = sprintf("%i-05-01", year))
+one_year <- daily_batter_bref(t1 = sprintf("%i-04-01", year), t2 = sprintf("%i-10-01", year))
+
+## filter to only include players who hat at least 10 at bats in the first month
+one_month <- one_month %>% filter(AB > 10)
+one_year <- one_year %>% filter(Name %in% one_month$Name)
+
+one_month <- one_month %>% arrange(Name)
+one_year <- one_year %>% arrange(Name)
+
+## Look at only the Dodgers
+LAD <- one_year %>% filter(Team == "Los Angeles" & Level == "MLB-NL") %>% .$Name
+
+lad_month <- one_month %>% filter(Name %in% LAD)
+lad_year <- one_year %>% filter(Name %in% LAD)
+
+write_csv(tibble(name=lad_month$Name,
+                 y=lad_month$H,
+                 n=lad_month$AB,
+                 val=lad_year$BA), 
+          path="lad.csv")
+
+```
+
+      
+
+
+
+
